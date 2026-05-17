@@ -62,7 +62,6 @@ public class TwitchClient extends WebSocketClient {
                 send("PONG :tmi.twitch.tv");
                 continue;
             }
-            if (!line.contains("PRIVMSG")) continue;
 
             String tagsPart = "";
             String rest = line;
@@ -71,6 +70,24 @@ public class TwitchClient extends WebSocketClient {
                 tagsPart = line.substring(1, sp);
                 rest = line.substring(sp + 1);
             }
+
+            if (rest.contains(" USERNOTICE ")) {
+                handleUserNotice(tagsPart, rest);
+                continue;
+            }
+            if (rest.contains(" CLEARCHAT ")) {
+                handleClearChat(tagsPart, rest);
+                continue;
+            }
+            if (rest.contains(" CLEARMSG ")) {
+                handleClearMsg(tagsPart, rest);
+                continue;
+            }
+            if (rest.contains(" ROOMSTATE ")) {
+                handleRoomState(tagsPart, rest);
+                continue;
+            }
+            if (!rest.contains(" PRIVMSG ")) continue;
 
             String user = rest.split("!", 2)[0].substring(1);
             String[] split = rest.split("PRIVMSG", 2);
@@ -128,9 +145,157 @@ public class TwitchClient extends WebSocketClient {
                     isSubscriber, isModerator, isBroadcaster, isVip, isTurbo, subMonths);
             TwitchChannel twitchChannel = new TwitchChannel(channelHash, roomId);
 
+            int bits = parseIntTag(tagsPart, "bits", 0);
+            if (bits > 0) {
+                manager.dispatchCheer(twitchChannel, twitchUser, bits, message);
+            }
+
             manager.dispatch(twitchChannel, twitchUser, message, messageId, isFirstMessage,
                     isReply, replyParentUser, replyParentMessage, replyParentMsgId);
         }
+    }
+
+    private void handleUserNotice(String tagsPart, String rest) {
+        String msgId = parseTag(tagsPart, "msg-id", "");
+        String roomId = parseTag(tagsPart, "room-id", "");
+        TwitchChannel ch = new TwitchChannel(channelHash, roomId);
+
+        switch (msgId) {
+            case "sub":
+            case "resub": {
+                TwitchUser user = userFromTags(tagsPart);
+                String tier = parseTag(tagsPart, "msg-param-sub-plan", "1000");
+                int cumulative = parseIntTag(tagsPart, "msg-param-cumulative-months", 1);
+                int streak = "1".equals(parseTag(tagsPart, "msg-param-should-share-streak", "0"))
+                        ? parseIntTag(tagsPart, "msg-param-streak-months", 0) : 0;
+                String body = null;
+                int colon = rest.indexOf(" :");
+                if (colon > -1 && colon + 2 < rest.length()) {
+                    body = sanitizeMessage(rest.substring(colon + 2));
+                }
+                manager.dispatchSubscribe(ch, user, tier, cumulative, streak, "resub".equals(msgId), body);
+                break;
+            }
+            case "subgift": {
+                TwitchUser gifter = userFromTags(tagsPart);
+                TwitchUser recipient = new TwitchUser(
+                        parseTag(tagsPart, "msg-param-recipient-user-name", ""),
+                        parseTag(tagsPart, "msg-param-recipient-display-name", ""),
+                        parseTag(tagsPart, "msg-param-recipient-id", ""),
+                        null, "", false, false, false, false, false, 0);
+                String tier = parseTag(tagsPart, "msg-param-sub-plan", "1000");
+                int months = parseIntTag(tagsPart, "msg-param-months", 1);
+                manager.dispatchGiftSub(ch, gifter, recipient, tier, months);
+                break;
+            }
+            case "anonsubgift": {
+                TwitchUser recipient = new TwitchUser(
+                        parseTag(tagsPart, "msg-param-recipient-user-name", ""),
+                        parseTag(tagsPart, "msg-param-recipient-display-name", ""),
+                        parseTag(tagsPart, "msg-param-recipient-id", ""),
+                        null, "", false, false, false, false, false, 0);
+                String tier = parseTag(tagsPart, "msg-param-sub-plan", "1000");
+                int months = parseIntTag(tagsPart, "msg-param-months", 1);
+                manager.dispatchGiftSub(ch, null, recipient, tier, months);
+                break;
+            }
+            case "submysterygift": {
+                TwitchUser gifter = userFromTags(tagsPart);
+                int count = parseIntTag(tagsPart, "msg-param-mass-gift-count", 1);
+                String tier = parseTag(tagsPart, "msg-param-sub-plan", "1000");
+                manager.dispatchMassGiftSub(ch, gifter, count, tier);
+                break;
+            }
+            case "anonsubmysterygift": {
+                int count = parseIntTag(tagsPart, "msg-param-mass-gift-count", 1);
+                String tier = parseTag(tagsPart, "msg-param-sub-plan", "1000");
+                manager.dispatchMassGiftSub(ch, null, count, tier);
+                break;
+            }
+            case "raid": {
+                TwitchUser raider = new TwitchUser(
+                        parseTag(tagsPart, "msg-param-login", ""),
+                        parseTag(tagsPart, "msg-param-displayName", ""),
+                        parseTag(tagsPart, "user-id", ""),
+                        parseTag(tagsPart, "color", ""), "",
+                        false, false, false, false, false, 0);
+                int viewers = parseIntTag(tagsPart, "msg-param-viewerCount", 0);
+                manager.dispatchRaid(ch, raider, viewers);
+                break;
+            }
+            case "announcement": {
+                TwitchUser user = userFromTags(tagsPart);
+                String color = parseTag(tagsPart, "msg-param-color", "PRIMARY");
+                String body = "";
+                int colon = rest.indexOf(" :");
+                if (colon > -1 && colon + 2 < rest.length()) {
+                    body = sanitizeMessage(rest.substring(colon + 2));
+                }
+                manager.dispatchAnnouncement(ch, user, body, color);
+                break;
+            }
+            default:
+                // bitsbadgetier, giftpaidupgrade, anongiftpaidupgrade, ritual, viewermilestone, unraid:
+                // silently ignored for now
+                break;
+        }
+    }
+
+    private void handleClearChat(String tagsPart, String rest) {
+        String roomId = parseTag(tagsPart, "room-id", "");
+        TwitchChannel ch = new TwitchChannel(channelHash, roomId);
+        int colon = rest.indexOf(" :");
+        String targetLogin = colon > -1 ? rest.substring(colon + 2) : "";
+
+        if (targetLogin.isEmpty()) {
+            manager.dispatchClearChat(ch);
+        } else {
+            int duration = parseIntTag(tagsPart, "ban-duration", 0);
+            String targetUserId = parseTag(tagsPart, "target-user-id", "");
+            manager.dispatchBan(ch, targetLogin, targetUserId, duration);
+        }
+    }
+
+    private void handleClearMsg(String tagsPart, String rest) {
+        String roomId = parseTag(tagsPart, "room-id", "");
+        TwitchChannel ch = new TwitchChannel(channelHash, roomId);
+        String login = parseTag(tagsPart, "login", "");
+        String targetMsgId = parseTag(tagsPart, "target-msg-id", "");
+        int colon = rest.indexOf(" :");
+        String body = colon > -1 ? sanitizeMessage(rest.substring(colon + 2)) : "";
+        manager.dispatchMessageDelete(ch, login, targetMsgId, body);
+    }
+
+    private void handleRoomState(String tagsPart, String rest) {
+        String roomId = parseTag(tagsPart, "room-id", "");
+        TwitchChannel ch = new TwitchChannel(channelHash, roomId);
+        String[] modes = {"slow", "subs-only", "emote-only", "followers-only", "r9k"};
+        for (String mode : modes) {
+            String val = parseTag(tagsPart, mode, "__missing__");
+            if (val.equals("__missing__")) continue;
+            try {
+                manager.dispatchRoomState(ch, mode, Integer.parseInt(val));
+            } catch (NumberFormatException ignored) {}
+        }
+    }
+
+    private TwitchUser userFromTags(String tagsPart) {
+        String login = parseTag(tagsPart, "login", "");
+        String displayName = parseTag(tagsPart, "display-name", login);
+        String userId = parseTag(tagsPart, "user-id", "");
+        String color = parseTag(tagsPart, "color", "");
+        String badges = parseTag(tagsPart, "badges", "");
+        boolean sub = badges.contains("subscriber/") || badges.contains("founder/");
+        boolean mod = badges.contains("moderator/") || "1".equals(parseTag(tagsPart, "mod", "0"));
+        boolean caster = badges.contains("broadcaster/");
+        boolean vip = badges.contains("vip/");
+        boolean turbo = badges.contains("turbo/");
+        return new TwitchUser(login, displayName, userId, color, badges, sub, mod, caster, vip, turbo, 0);
+    }
+
+    private int parseIntTag(String tagsPart, String key, int fallback) {
+        try { return Integer.parseInt(parseTag(tagsPart, key, String.valueOf(fallback))); }
+        catch (NumberFormatException e) { return fallback; }
     }
 
     private String parseTag(String tags, String key, String fallback) {

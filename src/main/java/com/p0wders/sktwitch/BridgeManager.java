@@ -1,9 +1,12 @@
 package com.p0wders.sktwitch;
 
-import com.p0wders.sktwitch.api.events.TwitchMessageEvent;
+import com.p0wders.sktwitch.api.events.*;
 import org.bukkit.Bukkit;
+import org.bukkit.event.Event;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.*;
+import java.util.function.Function;
 
 public class BridgeManager {
 
@@ -99,15 +102,60 @@ public class BridgeManager {
 
     public void dispatch(TwitchChannel channel, TwitchUser user, String message,
                          String messageId, boolean isFirstMessage,
-                         boolean isReply, TwitchUser replyParentUser,
+                         boolean isReply, @Nullable TwitchUser replyParentUser,
                          String replyParentMessage, String replyParentMessageId) {
+        fire(channel, bridge -> new TwitchMessageEvent(
+                user, channel, message, messageId, bridge, isFirstMessage,
+                isReply, replyParentUser, replyParentMessage, replyParentMessageId));
+    }
+
+    public void dispatchSubscribe(TwitchChannel ch, TwitchUser user, String tier,
+                                  int cumulative, int streak, boolean resub, @Nullable String message) {
+        fire(ch, bridge -> new TwitchSubscribeEvent(ch, bridge, user, tier, cumulative, streak, resub, message));
+    }
+
+    public void dispatchGiftSub(TwitchChannel ch, @Nullable TwitchUser gifter, TwitchUser recipient,
+                                String tier, int months) {
+        fire(ch, bridge -> new TwitchGiftSubEvent(ch, bridge, gifter, recipient, tier, months));
+    }
+
+    public void dispatchMassGiftSub(TwitchChannel ch, @Nullable TwitchUser gifter, int count, String tier) {
+        fire(ch, bridge -> new TwitchMassGiftSubEvent(ch, bridge, gifter, count, tier));
+    }
+
+    public void dispatchRaid(TwitchChannel ch, TwitchUser raider, int viewers) {
+        fire(ch, bridge -> new TwitchRaidEvent(ch, bridge, raider, viewers));
+    }
+
+    public void dispatchAnnouncement(TwitchChannel ch, TwitchUser user, String message, String color) {
+        fire(ch, bridge -> new TwitchAnnouncementEvent(ch, bridge, user, message, color));
+    }
+
+    public void dispatchBan(TwitchChannel ch, String targetLogin, String targetUserId, int durationSeconds) {
+        fire(ch, bridge -> new TwitchBanEvent(ch, bridge, targetLogin, targetUserId, durationSeconds));
+    }
+
+    public void dispatchClearChat(TwitchChannel ch) {
+        fire(ch, bridge -> new TwitchClearChatEvent(ch, bridge));
+    }
+
+    public void dispatchMessageDelete(TwitchChannel ch, String login, String msgId, String body) {
+        fire(ch, bridge -> new TwitchMessageDeleteEvent(ch, bridge, login, msgId, body));
+    }
+
+    public void dispatchRoomState(TwitchChannel ch, String mode, int value) {
+        fire(ch, bridge -> new TwitchRoomStateEvent(ch, bridge, mode, value));
+    }
+
+    public void dispatchCheer(TwitchChannel ch, TwitchUser user, int bits, String message) {
+        fire(ch, bridge -> new TwitchCheerEvent(ch, bridge, user, bits, message));
+    }
+
+    private void fire(TwitchChannel channel, Function<String, ? extends Event> factory) {
         Set<String> owners = channelToBridges.get(channel.getNameWithoutHash().toLowerCase());
         if (owners == null || owners.isEmpty()) return;
-
         for (String bridgeName : owners) {
-            TwitchMessageEvent event = new TwitchMessageEvent(
-                    user, channel, message, messageId, bridgeName, isFirstMessage,
-                    isReply, replyParentUser, replyParentMessage, replyParentMessageId);
+            Event event = factory.apply(bridgeName);
             Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getPluginManager().callEvent(event));
         }
     }

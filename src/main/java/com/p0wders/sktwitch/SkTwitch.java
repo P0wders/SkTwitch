@@ -7,11 +7,12 @@ import ch.njol.skript.classes.Parser;
 import ch.njol.skript.lang.ParseContext;
 import ch.njol.skript.registrations.Classes;
 import ch.njol.skript.registrations.EventValues;
-import ch.njol.skript.util.Getter;
-import com.p0wders.sktwitch.api.events.TwitchMessageEvent;
+import com.p0wders.sktwitch.api.events.*;
 import net.md_5.bungee.api.ChatColor;
 import org.bukkit.Bukkit;
+import org.bukkit.event.Event;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.skriptlang.skript.lang.converter.Converter;
 
 import java.io.IOException;
 
@@ -28,7 +29,7 @@ public final class SkTwitch extends JavaPlugin {
 
         SkriptAddon addon = Skript.registerAddon(this);
 
-        // TwitchUser ClassInfo
+        // ClassInfos
         Classes.registerClass(new ClassInfo<>(TwitchUser.class, "twitchuser")
                 .user("twitch ?users?")
                 .name("Twitch User")
@@ -39,7 +40,6 @@ public final class SkTwitch extends JavaPlugin {
                     @Override public String toVariableNameString(TwitchUser u) { return "twitchuser:" + u.getUsername(); }
                 }));
 
-        // TwitchChannel ClassInfo
         Classes.registerClass(new ClassInfo<>(TwitchChannel.class, "twitchchannel")
                 .user("twitch ?channels?")
                 .name("Twitch Channel")
@@ -50,23 +50,23 @@ public final class SkTwitch extends JavaPlugin {
                     @Override public String toVariableNameString(TwitchChannel c) { return "twitchchannel:" + c.getName(); }
                 }));
 
-        // event-twitchuser
-        EventValues.registerEventValue(TwitchMessageEvent.class, TwitchUser.class,
-                new Getter<TwitchUser, TwitchMessageEvent>() {
-                    @Override public TwitchUser get(TwitchMessageEvent e) { return e.getUser(); }
-                }, 0);
+        // Original message event values
+        registerEventValues(TwitchMessageEvent.class,
+                TwitchMessageEvent::getUser,
+                TwitchMessageEvent::getChannel,
+                TwitchMessageEvent::getMessage);
 
-        // event-twitchchannel
-        EventValues.registerEventValue(TwitchMessageEvent.class, TwitchChannel.class,
-                new Getter<TwitchChannel, TwitchMessageEvent>() {
-                    @Override public TwitchChannel get(TwitchMessageEvent e) { return e.getChannel(); }
-                }, 0);
-
-        // event-string = message body
-        EventValues.registerEventValue(TwitchMessageEvent.class, String.class,
-                new Getter<String, TwitchMessageEvent>() {
-                    @Override public String get(TwitchMessageEvent e) { return e.getMessage(); }
-                }, 0);
+        // New events: channel + bridge user values
+        registerUserAndChannel(TwitchSubscribeEvent.class, TwitchSubscribeEvent::getUser);
+        registerUserAndChannel(TwitchGiftSubEvent.class, TwitchGiftSubEvent::getRecipient);
+        registerUserAndChannel(TwitchMassGiftSubEvent.class, ev -> ev.getGifter()); // may be null
+        registerUserAndChannel(TwitchRaidEvent.class, TwitchRaidEvent::getRaider);
+        registerUserAndChannel(TwitchAnnouncementEvent.class, TwitchAnnouncementEvent::getUser);
+        registerUserAndChannel(TwitchCheerEvent.class, TwitchCheerEvent::getUser);
+        registerChannelOnly(TwitchBanEvent.class);
+        registerChannelOnly(TwitchClearChatEvent.class);
+        registerChannelOnly(TwitchMessageDeleteEvent.class);
+        registerChannelOnly(TwitchRoomStateEvent.class);
 
         try {
             addon.loadClasses("com.p0wders.sktwitch", "elements");
@@ -76,6 +76,24 @@ public final class SkTwitch extends JavaPlugin {
             return;
         }
         log("&aSkTwitch enabled");
+    }
+
+    private <E extends TwitchBaseEvent> void registerUserAndChannel(Class<E> cls, Converter<E, TwitchUser> userGetter) {
+        EventValues.registerEventValue(cls, TwitchUser.class, userGetter, 0);
+        EventValues.registerEventValue(cls, TwitchChannel.class, TwitchBaseEvent::getChannel, 0);
+    }
+
+    private <E extends TwitchBaseEvent> void registerChannelOnly(Class<E> cls) {
+        EventValues.registerEventValue(cls, TwitchChannel.class, TwitchBaseEvent::getChannel, 0);
+    }
+
+    private void registerEventValues(Class<TwitchMessageEvent> cls,
+                                     Converter<TwitchMessageEvent, TwitchUser> userGetter,
+                                     Converter<TwitchMessageEvent, TwitchChannel> channelGetter,
+                                     Converter<TwitchMessageEvent, String> stringGetter) {
+        EventValues.registerEventValue(cls, TwitchUser.class, userGetter, 0);
+        EventValues.registerEventValue(cls, TwitchChannel.class, channelGetter, 0);
+        EventValues.registerEventValue(cls, String.class, stringGetter, 0);
     }
 
     @Override
