@@ -6,6 +6,8 @@ import org.java_websocket.handshake.ServerHandshake;
 import org.jetbrains.annotations.Nullable;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -75,7 +77,10 @@ public class TwitchClient extends WebSocketClient {
             if (split.length < 2) continue;
             String[] msgSplit = split[1].split(":", 2);
             if (msgSplit.length < 2) continue;
-            String message = msgSplit[1];
+
+            String emotesTag = parseTag(tagsPart, "emotes", "");
+            String message = wrapTwitchEmotes(msgSplit[1], emotesTag);
+            message = sanitizeMessage(message);
 
             String displayName = parseTag(tagsPart, "display-name", user);
             String color = parseTag(tagsPart, "color", "");
@@ -103,9 +108,28 @@ public class TwitchClient extends WebSocketClient {
                 }
             }
 
-            manager.dispatch(channelHash, user, displayName, message, color,
-                    userId, messageId, roomId, badges,
-                    isSubscriber, isModerator, isBroadcaster, isVip, isTurbo, isFirstMessage, subMonths);
+            String replyParentMsgId = parseTag(tagsPart, "reply-parent-msg-id", "");
+            String replyParentUserId = parseTag(tagsPart, "reply-parent-user-id", "");
+            String replyParentLogin = parseTag(tagsPart, "reply-parent-user-login", "");
+            String replyParentDisplayName = parseTag(tagsPart, "reply-parent-display-name", "");
+            String replyParentBody = parseTag(tagsPart, "reply-parent-msg-body", "");
+
+            boolean isReply = !replyParentMsgId.isEmpty();
+            TwitchUser replyParentUser = null;
+            String replyParentMessage = "";
+            if (isReply) {
+                replyParentUser = new TwitchUser(
+                        replyParentLogin, replyParentDisplayName, replyParentUserId,
+                        null, "", false, false, false, false, false, 0);
+                replyParentMessage = sanitizeMessage(unescapeIrcTag(replyParentBody));
+            }
+
+            TwitchUser twitchUser = new TwitchUser(user, displayName, userId, color, badges,
+                    isSubscriber, isModerator, isBroadcaster, isVip, isTurbo, subMonths);
+            TwitchChannel twitchChannel = new TwitchChannel(channelHash, roomId);
+
+            manager.dispatch(twitchChannel, twitchUser, message, messageId, isFirstMessage,
+                    isReply, replyParentUser, replyParentMessage, replyParentMsgId);
         }
     }
 
@@ -116,6 +140,68 @@ public class TwitchClient extends WebSocketClient {
             if (kv.length == 2 && kv[0].equals(key) && !kv[1].isEmpty()) return kv[1];
         }
         return fallback;
+    }
+
+    private String unescapeIrcTag(String s) {
+        if (s == null || s.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < s.length()) {
+                char n = s.charAt(++i);
+                switch (n) {
+                    case 's' -> sb.append(' ');
+                    case ':' -> sb.append(';');
+                    case 'r' -> sb.append('\r');
+                    case 'n' -> sb.append('\n');
+                    case '\\' -> sb.append('\\');
+                    default -> sb.append(n);
+                }
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    private String sanitizeMessage(String s) {
+        if (s == null || s.isEmpty()) return s;
+        s = com.vdurmont.emoji.EmojiParser.parseToAliases(s);
+        return s.replaceAll("\\p{So}|\\p{Cn}|\\p{Cf}", "")
+                .trim()
+                .replaceAll(" {2,}", " ");
+    }
+
+    private String wrapTwitchEmotes(String message, String emotesTag) {
+        if (emotesTag == null || emotesTag.isEmpty()) return message;
+
+        record Range(int start, int end) {}
+        List<Range> ranges = new ArrayList<>();
+        for (String emote : emotesTag.split("/")) {
+            int colon = emote.indexOf(':');
+            if (colon < 0) continue;
+            for (String range : emote.substring(colon + 1).split(",")) {
+                String[] parts = range.split("-");
+                if (parts.length != 2) continue;
+                try {
+                    ranges.add(new Range(Integer.parseInt(parts[0]), Integer.parseInt(parts[1])));
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        ranges.sort((a, b) -> Integer.compare(b.start, a.start));
+
+        StringBuilder sb = new StringBuilder(message);
+        int[] codepoints = message.codePoints().toArray();
+        for (Range r : ranges) {
+            if (r.start < 0 || r.end >= codepoints.length) continue;
+            try {
+                int charStart = message.offsetByCodePoints(0, r.start);
+                int charEnd = message.offsetByCodePoints(0, r.end + 1);
+                String name = sb.substring(charStart, charEnd);
+                sb.replace(charStart, charEnd, ":" + name + ":");
+            } catch (IndexOutOfBoundsException ignored) {}
+        }
+        return sb.toString();
     }
 
     @Override

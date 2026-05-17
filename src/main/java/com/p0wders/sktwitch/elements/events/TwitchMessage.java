@@ -4,14 +4,14 @@ import ch.njol.skript.Skript;
 import ch.njol.skript.lang.Literal;
 import ch.njol.skript.lang.SkriptEvent;
 import ch.njol.skript.lang.SkriptParser.ParseResult;
-import com.p0wders.sktwitch.events.TwitchMessageEvent;
+import com.p0wders.sktwitch.api.events.TwitchMessageEvent;
 import org.bukkit.event.Event;
 
 @SuppressWarnings("unused")
-public class EvtTwitchMessage extends SkriptEvent {
+public class TwitchMessage extends SkriptEvent {
 
     static {
-        Skript.registerEvent("Twitch Message", EvtTwitchMessage.class, TwitchMessageEvent.class,
+        Skript.registerEvent("Twitch Message", TwitchMessage.class, TwitchMessageEvent.class,
                 "twitch message",
                 "twitch message in [channel] %string%",
                 "twitch message from bridge %string%");
@@ -36,7 +36,7 @@ public class EvtTwitchMessage extends SkriptEvent {
         if (value == null) return false;
 
         return switch (pattern) {
-            case 1 -> tme.getChannel().replace("#", "").equalsIgnoreCase(value.replace("#", ""));
+            case 1 -> tme.getChannel().getNameWithoutHash().equalsIgnoreCase(value.replace("#", ""));
             case 2 -> tme.getBridgeName().equalsIgnoreCase(value);
             default -> true;
         };

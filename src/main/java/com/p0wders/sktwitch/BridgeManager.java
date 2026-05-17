@@ -1,6 +1,6 @@
 package com.p0wders.sktwitch;
 
-import com.p0wders.sktwitch.events.TwitchMessageEvent;
+import com.p0wders.sktwitch.api.events.TwitchMessageEvent;
 import org.bukkit.Bukkit;
 
 import java.util.*;
@@ -37,10 +37,10 @@ public class BridgeManager {
         }
 
         if (oldBridge == null) {
-            plugin.log("StructBridge &e'" + bridge.name() + "'&r registered (&d" + newChannels.size() + "&r channel(s))");
+            plugin.log("Bridge &e'" + bridge.name() + "'&r registered (&d" + newChannels.size() + "&r channel(s))");
         } else {
             int kept = newChannels.size() - added.size();
-            plugin.log("StructBridge &e'" + bridge.name() + "'&r updated: &a" + kept + " kept&r, &b"
+            plugin.log("Bridge &e'" + bridge.name() + "'&r updated: &a" + kept + " kept&r, &b"
                     + added.size() + " added&r, &c" + removed.size() + " removed");
         }
     }
@@ -52,7 +52,7 @@ public class BridgeManager {
         for (String channel : bridge.channels()) {
             releaseChannel(channel, bridgeName);
         }
-        plugin.log("StructBridge &e'" + bridgeName + "'&r unregistered");
+        plugin.log("Bridge &e'" + bridgeName + "'&r unregistered");
     }
 
     private void releaseChannel(String channel, String bridgeName) {
@@ -97,18 +97,17 @@ public class BridgeManager {
         plugin.log("Connecting to &d#" + channel);
     }
 
-    public void dispatch(String channel, String username, String displayName, String message, String color,
-                         String userId, String messageId, String roomId, String badges,
-                         boolean isSubscriber, boolean isModerator, boolean isBroadcaster,
-                         boolean isVip, boolean isTurbo, boolean isFirstMessage, int subMonths) {
-        Set<String> owners = channelToBridges.get(channel.replace("#", "").toLowerCase());
+    public void dispatch(TwitchChannel channel, TwitchUser user, String message,
+                         String messageId, boolean isFirstMessage,
+                         boolean isReply, TwitchUser replyParentUser,
+                         String replyParentMessage, String replyParentMessageId) {
+        Set<String> owners = channelToBridges.get(channel.getNameWithoutHash().toLowerCase());
         if (owners == null || owners.isEmpty()) return;
 
         for (String bridgeName : owners) {
             TwitchMessageEvent event = new TwitchMessageEvent(
-                    channel, bridgeName, username, displayName, message, color,
-                    userId, messageId, roomId, badges,
-                    isSubscriber, isModerator, isBroadcaster, isVip, isTurbo, isFirstMessage, subMonths);
+                    user, channel, message, messageId, bridgeName, isFirstMessage,
+                    isReply, replyParentUser, replyParentMessage, replyParentMessageId);
             Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getPluginManager().callEvent(event));
         }
     }
