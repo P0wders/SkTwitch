@@ -13,8 +13,8 @@ public class UserStatus extends Condition {
 
     static {
         Skript.registerCondition(UserStatus.class,
-                "%twitchuser% is [a] (0¦subscriber|1¦moderator|2¦broadcaster|3¦vip|4¦turbo)",
-                "%twitchuser% is(n't| not) [a] (0¦subscriber|1¦moderator|2¦broadcaster|3¦vip|4¦turbo)"
+                "%twitchuser% is [a] (0¦subscriber|1¦moderator|2¦broadcaster|3¦vip|4¦turbo|5¦founder)",
+                "%twitchuser% is(n't| not) [a] (0¦subscriber|1¦moderator|2¦broadcaster|3¦vip|4¦turbo|5¦founder)"
         );
     }
 
@@ -40,6 +40,7 @@ public class UserStatus extends Condition {
             case 2 -> u.isBroadcaster();
             case 3 -> u.isVip();
             case 4 -> u.isTurbo();
+            case 5 -> u.isFounder();
             default -> false;
         };
         return isNegated() != result;

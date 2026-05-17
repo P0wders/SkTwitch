@@ -6,6 +6,7 @@ import ch.njol.skript.lang.ExpressionType;
 import ch.njol.skript.lang.SkriptParser.ParseResult;
 import ch.njol.skript.lang.util.SimpleExpression;
 import ch.njol.util.Kleenean;
+import com.p0wders.sktwitch.api.events.TwitchBaseEvent;
 import com.p0wders.sktwitch.api.events.TwitchMessageEvent;
 import org.bukkit.event.Event;
 import org.jetbrains.annotations.Nullable;
@@ -20,8 +21,9 @@ public class StructBridgeName extends SimpleExpression<String> {
 
     @Override
     public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, ParseResult parseResult) {
-        if (!getParser().isCurrentEvent(TwitchMessageEvent.class)) {
-            Skript.error("bridge name can only be used in a twitch message event");
+        if (!getParser().isCurrentEvent(TwitchMessageEvent.class)
+                && !getParser().isCurrentEvent(TwitchBaseEvent.class)) {
+            Skript.error("bridge name can only be used in a twitch event");
             return false;
         }
         return true;
@@ -29,8 +31,9 @@ public class StructBridgeName extends SimpleExpression<String> {
 
     @Override
     protected String @Nullable [] get(Event e) {
-        if (!(e instanceof TwitchMessageEvent tme)) return null;
-        return new String[]{ tme.getBridgeName() };
+        if (e instanceof TwitchMessageEvent tme) return new String[]{ tme.getBridgeName() };
+        if (e instanceof TwitchBaseEvent tbe) return new String[]{ tbe.getBridgeName() };
+        return null;
     }
 
     @Override public boolean isSingle() { return true; }

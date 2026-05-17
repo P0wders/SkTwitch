@@ -101,30 +101,44 @@ public class BridgeManager {
     }
 
     public void dispatch(TwitchChannel channel, TwitchUser user, String message,
-                         String messageId, boolean isFirstMessage,
+                         String messageId, boolean isFirstMessage, boolean isReturningChatter,
                          boolean isReply, @Nullable TwitchUser replyParentUser,
-                         String replyParentMessage, String replyParentMessageId) {
+                         String replyParentMessage, String replyParentMessageId,
+                         @Nullable TwitchUser threadParentUser, String threadParentMessageId,
+                         long timestamp, String customRewardId, String autoModFlags,
+                         int hypeChatAmount, String hypeChatCurrency, int hypeChatLevel,
+                         boolean hypeChatSystem, String sourceRoomId, String sourceMessageId) {
         fire(channel, bridge -> new TwitchMessageEvent(
-                user, channel, message, messageId, bridge, isFirstMessage,
-                isReply, replyParentUser, replyParentMessage, replyParentMessageId));
+                user, channel, message, messageId, bridge, isFirstMessage, isReturningChatter,
+                isReply, replyParentUser, replyParentMessage, replyParentMessageId,
+                threadParentUser, threadParentMessageId,
+                timestamp, customRewardId, autoModFlags,
+                hypeChatAmount, hypeChatCurrency, hypeChatLevel, hypeChatSystem,
+                sourceRoomId, sourceMessageId));
     }
 
-    public void dispatchSubscribe(TwitchChannel ch, TwitchUser user, String tier,
-                                  int cumulative, int streak, boolean resub, @Nullable String message) {
-        fire(ch, bridge -> new TwitchSubscribeEvent(ch, bridge, user, tier, cumulative, streak, resub, message));
+    public void dispatchSubscribe(TwitchChannel ch, TwitchUser user, String tier, String planName,
+                                  int cumulative, int streak, int multiDur, int multiTen,
+                                  boolean resub, @Nullable String message) {
+        fire(ch, bridge -> new TwitchSubscribeEvent(ch, bridge, user, tier, planName,
+                cumulative, streak, multiDur, multiTen, resub, message));
     }
 
     public void dispatchGiftSub(TwitchChannel ch, @Nullable TwitchUser gifter, TwitchUser recipient,
-                                String tier, int months) {
-        fire(ch, bridge -> new TwitchGiftSubEvent(ch, bridge, gifter, recipient, tier, months));
+                                String tier, String planName, int recipientTotalMonths,
+                                int giftDurationMonths, String originId, int senderTotalGifts) {
+        fire(ch, bridge -> new TwitchGiftSubEvent(ch, bridge, gifter, recipient, tier, planName,
+                recipientTotalMonths, giftDurationMonths, originId, senderTotalGifts));
     }
 
-    public void dispatchMassGiftSub(TwitchChannel ch, @Nullable TwitchUser gifter, int count, String tier) {
-        fire(ch, bridge -> new TwitchMassGiftSubEvent(ch, bridge, gifter, count, tier));
+    public void dispatchMassGiftSub(TwitchChannel ch, @Nullable TwitchUser gifter, int count, String tier,
+                                    String planName, String originId, int senderTotalGifts) {
+        fire(ch, bridge -> new TwitchMassGiftSubEvent(ch, bridge, gifter, count, tier,
+                planName, originId, senderTotalGifts));
     }
 
-    public void dispatchRaid(TwitchChannel ch, TwitchUser raider, int viewers) {
-        fire(ch, bridge -> new TwitchRaidEvent(ch, bridge, raider, viewers));
+    public void dispatchRaid(TwitchChannel ch, TwitchUser raider, int viewers, String profileImageUrl) {
+        fire(ch, bridge -> new TwitchRaidEvent(ch, bridge, raider, viewers, profileImageUrl));
     }
 
     public void dispatchAnnouncement(TwitchChannel ch, TwitchUser user, String message, String color) {

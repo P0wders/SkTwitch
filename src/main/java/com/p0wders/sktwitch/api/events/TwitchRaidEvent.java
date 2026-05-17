@@ -10,16 +10,20 @@ public class TwitchRaidEvent extends TwitchBaseEvent {
 
     private final TwitchUser raider;
     private final int viewerCount;
+    private final String profileImageUrl;
 
     public TwitchRaidEvent(@NotNull TwitchChannel channel, @NotNull String bridgeName,
-                           @NotNull TwitchUser raider, int viewerCount) {
+                           @NotNull TwitchUser raider, int viewerCount,
+                           @NotNull String profileImageUrl) {
         super(channel, bridgeName);
         this.raider = raider;
         this.viewerCount = viewerCount;
+        this.profileImageUrl = profileImageUrl;
     }
 
     public @NotNull TwitchUser getRaider() { return raider; }
     public int getViewerCount() { return viewerCount; }
+    public @NotNull String getProfileImageUrl() { return profileImageUrl; }
 
     @Override public @NotNull HandlerList getHandlers() { return HANDLERS; }
     public static HandlerList getHandlerList() { return HANDLERS; }
