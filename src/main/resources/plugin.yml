@@ -1,0 +1,7 @@
+name: SkTwitch
+version: '${version}'
+main: com.p0wders.sktwitch.SkTwitch
+api-version: '1.21'
+depend: [Skript]
+authors: [P0wders]
+description: Twitch IRC chat for Skript
