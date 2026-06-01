@@ -67,6 +67,12 @@ public final class SkTwitch extends JavaPlugin {
         registerChannelOnly(TwitchClearChatEvent.class);
         registerChannelOnly(TwitchMessageDeleteEvent.class);
         registerChannelOnly(TwitchRoomStateEvent.class);
+        registerChannelOnly(TwitchNoticeEvent.class);
+        registerUserAndChannel(TwitchUserJoinEvent.class, SkTwitch::resolveJoinPartUser);
+        registerUserAndChannel(TwitchUserPartEvent.class, SkTwitch::resolveJoinPartUser);
+        // Host events have no associated user (the target is a channel name, not a chatter),
+        // so keep them as channel + string of the target channel name.
+        registerChannelAndString(TwitchHostEvent.class, TwitchHostEvent::getTargetChannel);
 
         try {
             addon.loadClasses("com.p0wders.sktwitch", "elements");
@@ -85,6 +91,38 @@ public final class SkTwitch extends JavaPlugin {
 
     private <E extends TwitchBaseEvent> void registerChannelOnly(Class<E> cls) {
         EventValues.registerEventValue(cls, TwitchChannel.class, TwitchBaseEvent::getChannel, 0);
+    }
+
+    private <E extends TwitchBaseEvent> void registerChannelAndString(Class<E> cls, Converter<E, String> stringGetter) {
+        EventValues.registerEventValue(cls, TwitchChannel.class, TwitchBaseEvent::getChannel, 0);
+        EventValues.registerEventValue(cls, String.class, stringGetter, 0);
+    }
+
+    /**
+     * Resolves a JOIN/PART event's login to a TwitchUser. IRC's JOIN/PART
+     * messages carry only the login, so anything richer (display name, badges,
+     * sub status, user-id) has to come from the cache. If the user has been
+     * seen in any prior event on the same bridge — and especially because
+     * a PRIVMSG on this channel always seeds the cache — we return that.
+     * Otherwise we synthesise a minimal user so {@code event-twitchuser} is
+     * never null and scripts using {@code %event-twitchuser%} just get the
+     * login back via TwitchUser#toString.
+     */
+    private static TwitchUser resolveJoinPartUser(TwitchBaseEvent event) {
+        String login;
+        if (event instanceof TwitchUserJoinEvent ev) login = ev.getLogin();
+        else if (event instanceof TwitchUserPartEvent ev) login = ev.getLogin();
+        else return null;
+
+        TwitchUser cached = instance.bridgeManager.lookupUser(login, event.getBridgeName());
+        if (cached != null) return cached;
+
+        // Minimal stub. All booleans false, no badges, no user-id — but
+        // toString returns the login so scripts behave intuitively.
+        return new TwitchUser(login, login, "", null, "",
+                "", "",
+                false, false, false, false, false, false,
+                0, 0);
     }
 
     private void registerEventValues(Class<TwitchMessageEvent> cls,

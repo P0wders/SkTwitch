@@ -10,5 +10,14 @@ public record Bridge(
         @Nullable String nickname,
         boolean autoReconnect,
         boolean requestTags,
-        boolean requestCommands
-) {}
+        boolean requestCommands,
+        boolean requestMembership
+) {
+    /** Backwards-compatible constructor for callers that don't set membership. */
+    public Bridge(String name, List<String> channels, @Nullable String oauthToken,
+                  @Nullable String nickname, boolean autoReconnect,
+                  boolean requestTags, boolean requestCommands) {
+        this(name, channels, oauthToken, nickname, autoReconnect,
+                requestTags, requestCommands, false);
+    }
+}

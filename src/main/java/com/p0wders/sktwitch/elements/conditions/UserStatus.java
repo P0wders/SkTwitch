@@ -1,6 +1,9 @@
 package com.p0wders.sktwitch.elements.conditions;
 
 import ch.njol.skript.Skript;
+import ch.njol.skript.doc.Description;
+import ch.njol.skript.doc.Name;
+import ch.njol.skript.doc.Since;
 import ch.njol.skript.lang.Condition;
 import ch.njol.skript.lang.Expression;
 import ch.njol.skript.lang.SkriptParser.ParseResult;
@@ -8,6 +11,9 @@ import ch.njol.util.Kleenean;
 import com.p0wders.sktwitch.TwitchUser;
 import org.bukkit.event.Event;
 
+@Name("User Status")
+@Description("Checks whether a Twitch user has a given status: subscriber, moderator, broadcaster, VIP, turbo or founder.")
+@Since("1.0.0")
 @SuppressWarnings("unused")
 public class UserStatus extends Condition {
 

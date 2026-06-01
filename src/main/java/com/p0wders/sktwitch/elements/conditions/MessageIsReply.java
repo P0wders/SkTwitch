@@ -1,6 +1,9 @@
 package com.p0wders.sktwitch.elements.conditions;
 
 import ch.njol.skript.Skript;
+import ch.njol.skript.doc.Description;
+import ch.njol.skript.doc.Name;
+import ch.njol.skript.doc.Since;
 import ch.njol.skript.lang.Condition;
 import ch.njol.skript.lang.Expression;
 import ch.njol.skript.lang.SkriptParser.ParseResult;
@@ -8,6 +11,9 @@ import ch.njol.util.Kleenean;
 import com.p0wders.sktwitch.api.events.TwitchMessageEvent;
 import org.bukkit.event.Event;
 
+@Name("Message Is Reply")
+@Description("Checks whether the Twitch message is a reply to another message. Can only be used in a Twitch message event.")
+@Since("1.0.0")
 @SuppressWarnings("unused")
 public class MessageIsReply extends Condition {
 

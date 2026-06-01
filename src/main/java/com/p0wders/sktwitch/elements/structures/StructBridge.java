@@ -1,6 +1,9 @@
 package com.p0wders.sktwitch.elements.structures;
 
 import ch.njol.skript.Skript;
+import ch.njol.skript.doc.Description;
+import ch.njol.skript.doc.Name;
+import ch.njol.skript.doc.Since;
 import ch.njol.skript.lang.Literal;
 import ch.njol.skript.lang.SkriptParser;
 import com.p0wders.sktwitch.SkTwitch;
@@ -17,6 +20,10 @@ import org.skriptlang.skript.lang.structure.Structure;
 import java.util.Arrays;
 import java.util.List;
 
+@Name("Bridge")
+@Description({"Defines a new Twitch bridge that connects to one or more channels.",
+        "Supports optional 'oauth token', 'nickname', 'auto reconnect', 'request tags' and 'request commands' entries."})
+@Since("1.0.0")
 @SuppressWarnings({"removal", "unused"})
 public class StructBridge extends Structure {
 

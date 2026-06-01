@@ -15,6 +15,11 @@ public class BridgeManager {
     private final Map<String, TwitchClient> connections = new HashMap<>();
     private final Map<String, Set<String>> channelToBridges = new HashMap<>();
 
+    /** Per-bridge user caches. Key: bridge name. */
+    private final Map<String, com.p0wders.sktwitch.cache.TwitchUserCache> userCaches = new HashMap<>();
+    /** Per-bridge channel caches. */
+    private final Map<String, com.p0wders.sktwitch.cache.TwitchChannelCache> channelCaches = new HashMap<>();
+
     public BridgeManager(SkTwitch plugin) {
         this.plugin = plugin;
     }
@@ -22,6 +27,8 @@ public class BridgeManager {
     public synchronized void register(Bridge bridge) {
         Bridge oldBridge = bridges.get(bridge.name());
         bridges.put(bridge.name(), bridge);
+        userCaches.computeIfAbsent(bridge.name(), k -> new com.p0wders.sktwitch.cache.TwitchUserCache());
+        channelCaches.computeIfAbsent(bridge.name(), k -> new com.p0wders.sktwitch.cache.TwitchChannelCache());
 
         Set<String> oldChannels = oldBridge != null ? new HashSet<>(oldBridge.channels()) : Set.of();
         Set<String> newChannels = new HashSet<>(bridge.channels());
@@ -55,6 +62,8 @@ public class BridgeManager {
         for (String channel : bridge.channels()) {
             releaseChannel(channel, bridgeName);
         }
+        userCaches.remove(bridgeName);
+        channelCaches.remove(bridgeName);
         plugin.log("Bridge &e'" + bridgeName + "'&r unregistered");
     }
 
@@ -76,7 +85,7 @@ public class BridgeManager {
         if (connections.containsKey(channel)) return;
 
         Set<String> owners = channelToBridges.get(channel);
-        boolean tags = false, commands = false, reconnect = false;
+        boolean tags = false, commands = false, membership = false, reconnect = false;
         String oauth = null, nick = null;
 
         for (String bridgeName : owners) {
@@ -84,6 +93,7 @@ public class BridgeManager {
             if (b == null) continue;
             if (b.requestTags()) tags = true;
             if (b.requestCommands()) commands = true;
+            if (b.requestMembership()) membership = true;
             if (b.autoReconnect()) reconnect = true;
             if (b.oauthToken() != null && oauth == null) {
                 oauth = b.oauthToken();
@@ -94,7 +104,8 @@ public class BridgeManager {
             }
         }
 
-        TwitchClient client = new TwitchClient(channel, oauth, nick, reconnect, tags, commands, this);
+        TwitchClient client = new TwitchClient(channel, oauth, nick, reconnect, tags, commands, membership, this);
+
         connections.put(channel, client);
         client.connect();
         plugin.log("Connecting to &d#" + channel);
@@ -161,8 +172,142 @@ public class BridgeManager {
         fire(ch, bridge -> new TwitchRoomStateEvent(ch, bridge, mode, value));
     }
 
+    public void dispatchNotice(TwitchChannel ch, String noticeId, String message) {
+        fire(ch, bridge -> new TwitchNoticeEvent(ch, bridge, noticeId, message));
+    }
+
     public void dispatchCheer(TwitchChannel ch, TwitchUser user, int bits, String message) {
         fire(ch, bridge -> new TwitchCheerEvent(ch, bridge, user, bits, message));
+    }
+
+    public void dispatchUserJoin(TwitchChannel ch, String login) {
+        fire(ch, bridge -> new TwitchUserJoinEvent(ch, bridge, login));
+    }
+
+    public void dispatchUserPart(TwitchChannel ch, String login) {
+        fire(ch, bridge -> new TwitchUserPartEvent(ch, bridge, login));
+    }
+
+    public void dispatchHost(TwitchChannel ch, String targetChannel, int viewers) {
+        fire(ch, bridge -> new TwitchHostEvent(ch, bridge, targetChannel, viewers));
+    }
+
+    // --- cache feeders, called by TwitchClient on every parsed event ---
+
+    /**
+     * Records a user into every cache owned by a bridge that subscribes to
+     * the given channel. Safe to call from the IRC reader thread.
+     */
+    public void cacheUser(TwitchChannel channel, TwitchUser user) {
+        if (user == null) return;
+        Set<String> owners;
+        synchronized (this) {
+            owners = channelToBridges.get(channel.getNameWithoutHash().toLowerCase());
+            if (owners == null) return;
+            owners = new HashSet<>(owners);
+        }
+        for (String bridgeName : owners) {
+            var cache = userCaches.get(bridgeName);
+            if (cache != null) cache.put(user);
+        }
+    }
+
+    /** Same idea for channels. */
+    public void cacheChannel(TwitchChannel channel) {
+        if (channel == null) return;
+        Set<String> owners;
+        synchronized (this) {
+            owners = channelToBridges.get(channel.getNameWithoutHash().toLowerCase());
+            if (owners == null) return;
+            owners = new HashSet<>(owners);
+        }
+        for (String bridgeName : owners) {
+            var cache = channelCaches.get(bridgeName);
+            if (cache != null) cache.put(channel);
+        }
+    }
+
+    // --- introspection / lookup APIs used by Skript expressions ---
+
+    public @Nullable TwitchUser lookupUser(String login, @Nullable String bridgeName) {
+        if (bridgeName != null) {
+            var cache = userCaches.get(bridgeName);
+            return cache == null ? null : cache.get(login);
+        }
+        for (var cache : userCaches.values()) {
+            TwitchUser u = cache.get(login);
+            if (u != null) return u;
+        }
+        return null;
+    }
+
+    public @Nullable TwitchChannel lookupChannel(String name, @Nullable String bridgeName) {
+        if (bridgeName != null) {
+            var cache = channelCaches.get(bridgeName);
+            return cache == null ? null : cache.get(name);
+        }
+        for (var cache : channelCaches.values()) {
+            TwitchChannel c = cache.get(name);
+            if (c != null) return c;
+        }
+        return null;
+    }
+
+    public Collection<TwitchUser> allCachedUsers(@Nullable String bridgeName) {
+        if (bridgeName != null) {
+            var cache = userCaches.get(bridgeName);
+            return cache == null ? List.of() : cache.all();
+        }
+        List<TwitchUser> all = new ArrayList<>();
+        for (var cache : userCaches.values()) all.addAll(cache.all());
+        return all;
+    }
+
+    public Collection<TwitchChannel> allCachedChannels(@Nullable String bridgeName) {
+        if (bridgeName != null) {
+            var cache = channelCaches.get(bridgeName);
+            return cache == null ? List.of() : cache.all();
+        }
+        List<TwitchChannel> all = new ArrayList<>();
+        for (var cache : channelCaches.values()) all.addAll(cache.all());
+        return all;
+    }
+
+    public synchronized Collection<String> registeredBridges() {
+        return new ArrayList<>(bridges.keySet());
+    }
+
+    /**
+     * A bridge counts as connected if at least one of its channels currently
+     * has a live WebSocket and that socket reports as open.
+     */
+    public synchronized Collection<String> connectedBridges() {
+        List<String> out = new ArrayList<>();
+        for (var entry : bridges.entrySet()) {
+            if (isBridgeConnectedInternal(entry.getValue())) out.add(entry.getKey());
+        }
+        return out;
+    }
+
+    public synchronized boolean isBridgeConnected(String bridgeName) {
+        Bridge b = bridges.get(bridgeName);
+        return b != null && isBridgeConnectedInternal(b);
+    }
+
+    private boolean isBridgeConnectedInternal(Bridge b) {
+        for (String channel : b.channels()) {
+            TwitchClient client = connections.get(channel);
+            if (client != null && client.isOpen()) return true;
+        }
+        return false;
+    }
+
+    public synchronized Collection<String> channelsOfBridge(String bridgeName) {
+        Bridge b = bridges.get(bridgeName);
+        if (b == null) return List.of();
+        List<String> out = new ArrayList<>(b.channels().size());
+        for (String ch : b.channels()) out.add("#" + ch);
+        return out;
     }
 
     private void fire(TwitchChannel channel, Function<String, ? extends Event> factory) {

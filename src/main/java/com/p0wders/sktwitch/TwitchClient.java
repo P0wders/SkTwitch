@@ -20,14 +20,27 @@ public class TwitchClient extends WebSocketClient {
     private final boolean autoReconnect;
     private final boolean requestTags;
     private final boolean requestCommands;
+    private final boolean requestMembership;
     private final BridgeManager manager;
 
     private final AtomicBoolean shutdownRequested = new AtomicBoolean(false);
     private int reconnectAttempts = 0;
 
+    /**
+     * When membership is requested, we expect Twitch to send the NAMES list
+     * (and subsequent JOINs) shortly after our own JOIN succeeds. If nothing
+     * membership-related arrives in {@link #LARGE_CHANNEL_DETECT_TICKS} ticks,
+     * the channel is almost certainly over Twitch's ~1000-viewer threshold,
+     * where JOIN/PART/NAMES are suppressed entirely. We warn once and clear
+     * the flag so we don't spam on reconnect cycles.
+     */
+    private volatile boolean membershipObserved = false;
+    private volatile int largeChannelWarningTaskId = -1;
+    private static final long LARGE_CHANNEL_DETECT_TICKS = 200L; // 10 seconds
+
     public TwitchClient(String channel, @Nullable String oauthToken, @Nullable String nickname,
                         boolean autoReconnect, boolean requestTags, boolean requestCommands,
-                        BridgeManager manager) {
+                        boolean requestMembership, BridgeManager manager) {
         super(URI.create("wss://irc-ws.chat.twitch.tv:443"));
         this.channelKey = channel.toLowerCase().replace("#", "");
         this.channelHash = "#" + channelKey;
@@ -36,6 +49,7 @@ public class TwitchClient extends WebSocketClient {
         this.autoReconnect = autoReconnect;
         this.requestTags = requestTags;
         this.requestCommands = requestCommands;
+        this.requestMembership = requestMembership;
         this.manager = manager;
     }
 
@@ -45,6 +59,7 @@ public class TwitchClient extends WebSocketClient {
         StringBuilder caps = new StringBuilder("CAP REQ :");
         if (requestTags) caps.append("twitch.tv/tags ");
         if (requestCommands) caps.append("twitch.tv/commands ");
+        if (requestMembership) caps.append("twitch.tv/membership ");
         if (!caps.toString().equals("CAP REQ :")) {
             send(caps.toString().trim());
         }
@@ -53,6 +68,30 @@ public class TwitchClient extends WebSocketClient {
         }
         send("NICK " + nick);
         send("JOIN " + channelHash);
+
+        // Arm the large-channel warning timer only when membership was requested.
+        // On a small channel, Twitch sends NAMES (353) within ~1-2 seconds of JOIN.
+        // On a large channel (>~1000 viewers), Twitch never sends anything membership-related.
+        if (requestMembership && largeChannelWarningTaskId == -1) {
+            membershipObserved = false;
+            try {
+                largeChannelWarningTaskId = Bukkit.getScheduler().runTaskLater(
+                        SkTwitch.getInstance(),
+                        this::checkLargeChannelSilence,
+                        LARGE_CHANNEL_DETECT_TICKS
+                ).getTaskId();
+            } catch (IllegalStateException ignored) {
+                // plugin is shutting down — skip
+            }
+        }
+    }
+
+    private void checkLargeChannelSilence() {
+        largeChannelWarningTaskId = -1;
+        if (membershipObserved || shutdownRequested.get()) return;
+        SkTwitch.getInstance().log("&e⚠ &d#" + channelKey + "&e has more than ~1000 viewers; "
+                + "Twitch suppresses &fJOIN&e/&fPART&e/&fNAMES&e on large channels. "
+                + "&7Membership events will not fire for this channel until it drops below the threshold.");
     }
 
     @Override
@@ -83,8 +122,51 @@ public class TwitchClient extends WebSocketClient {
                 handleClearMsg(tagsPart, rest);
                 continue;
             }
+            if (rest.contains(" NOTICE ")) {
+                handleNotice(tagsPart, rest);
+                continue;
+            }
             if (rest.contains(" ROOMSTATE ")) {
                 handleRoomState(tagsPart, rest);
+                continue;
+            }
+            if (rest.contains(" JOIN ")) {
+                // Only a JOIN from someone other than us counts as evidence
+                // that Twitch is sending us membership traffic for real users.
+                String loginPeek = extractPrefixLogin(rest);
+                if (loginPeek != null && !loginPeek.equalsIgnoreCase(nick)) {
+                    membershipObserved = true;
+                }
+                handleJoin(rest);
+                continue;
+            }
+            if (rest.contains(" PART ")) {
+                String loginPeek = extractPrefixLogin(rest);
+                if (loginPeek != null && !loginPeek.equalsIgnoreCase(nick)) {
+                    membershipObserved = true;
+                }
+                handlePart(rest);
+                continue;
+            }
+            // 353 = NAMES reply, 366 = end of NAMES. Even an empty NAMES is
+            // a real membership response from Twitch — small channels get one,
+            // large ones don't — so receiving either confirms it works here.
+            if (rest.contains(" 353 ") || rest.contains(" 366 ")) {
+                membershipObserved = true;
+                continue;
+            }
+            if (rest.contains(" HOSTTARGET ")) {
+                handleHostTarget(rest);
+                continue;
+            }
+            if (rest.startsWith("RECONNECT") || rest.contains(" RECONNECT")) {
+                handleReconnect();
+                continue;
+            }
+            // USERSTATE and GLOBALUSERSTATE: log only — they describe the bot's
+            // own identity, which on justinfan is empty. Useful diagnostic for
+            // OAuth users later but no script-visible event today.
+            if (rest.contains(" USERSTATE ") || rest.contains(" GLOBALUSERSTATE")) {
                 continue;
             }
             if (!rest.contains(" PRIVMSG ")) continue;
@@ -187,6 +269,9 @@ public class TwitchClient extends WebSocketClient {
                     isSubscriber, isModerator, isBroadcaster, isVip, isTurbo, isFounder,
                     subMonths, exactSubMonths);
             TwitchChannel twitchChannel = new TwitchChannel(channelHash, roomId);
+
+            manager.cacheUser(twitchChannel, twitchUser);
+            manager.cacheChannel(twitchChannel);
 
             int bits = parseIntTag(tagsPart, "bits", 0);
             if (bits > 0) {
@@ -342,6 +427,100 @@ public class TwitchClient extends WebSocketClient {
                 manager.dispatchRoomState(ch, mode, Integer.parseInt(val));
             } catch (NumberFormatException ignored) {}
         }
+    }
+
+    private void handleJoin(String rest) {
+        // ":login!login@login.tmi.twitch.tv JOIN #channel"
+        String login = extractPrefixLogin(rest);
+        if (login == null) return;
+        if (isSelf(login)) return;            // suppress the bot's own JOIN echo
+        TwitchChannel ch = parseChannelFromLine(rest, " JOIN ");
+        manager.dispatchUserJoin(ch, login);
+    }
+
+    private void handlePart(String rest) {
+        String login = extractPrefixLogin(rest);
+        if (login == null) return;
+        if (isSelf(login)) return;            // suppress the bot's own PART echo
+        TwitchChannel ch = parseChannelFromLine(rest, " PART ");
+        manager.dispatchUserPart(ch, login);
+    }
+
+    private boolean isSelf(String login) {
+        return login != null && login.equalsIgnoreCase(nick);
+    }
+
+    /** Pulls the "#channel" token that immediately follows the given command marker. */
+    private TwitchChannel parseChannelFromLine(String rest, String commandMarker) {
+        int idx = rest.indexOf(commandMarker);
+        String name = channelHash;
+        if (idx >= 0) {
+            String after = rest.substring(idx + commandMarker.length());
+            int sp = after.indexOf(' ');
+            String tok = sp > 0 ? after.substring(0, sp) : after;
+            if (tok.startsWith("#")) name = tok;
+        }
+        return new TwitchChannel(name, "");
+    }
+
+    private void handleHostTarget(String rest) {
+        // ":tmi.twitch.tv HOSTTARGET #hostingChannel :targetChannel [viewers]"
+        int colon = rest.indexOf(" :", rest.indexOf(" HOSTTARGET "));
+        if (colon < 0) return;
+        String payload = rest.substring(colon + 2).trim();
+        String[] parts = payload.split(" ");
+        String target = parts.length > 0 ? parts[0] : "-";
+        int viewers = -1;
+        if (parts.length > 1) {
+            try { viewers = Integer.parseInt(parts[1]); } catch (NumberFormatException ignored) {}
+        }
+        TwitchChannel ch = new TwitchChannel(channelHash, "");
+        manager.dispatchHost(ch, target, viewers);
+    }
+
+    private void handleReconnect() {
+        SkTwitch.getInstance().log("&7Twitch requested reconnect for &d#" + channelKey
+                + "&7 — reconnecting immediately");
+        // Close cleanly; the existing onClose/autoReconnect path takes over.
+        try { close(); } catch (Exception ignored) {}
+    }
+
+    /** Extracts "login" from ":login!login@login.tmi.twitch.tv ..." */
+    private static @Nullable String extractPrefixLogin(String rest) {
+        if (!rest.startsWith(":")) return null;
+        int bang = rest.indexOf('!');
+        if (bang <= 1) return null;
+        return rest.substring(1, bang);
+    }
+
+    private void handleNotice(String tagsPart, String rest) {
+        // Format: ":tmi.twitch.tv NOTICE #channel :body"
+        // For pre-login notices (auth failures), the target may be "*" instead
+        // of a channel — in that case we dispatch with a null channel.
+        String noticeId = parseTag(tagsPart, "msg-id", "");
+
+        String target = "";
+        int noticeIdx = rest.indexOf(" NOTICE ");
+        if (noticeIdx >= 0) {
+            String afterCmd = rest.substring(noticeIdx + " NOTICE ".length());
+            int sp = afterCmd.indexOf(' ');
+            target = sp > 0 ? afterCmd.substring(0, sp) : afterCmd;
+        }
+
+        int colon = rest.indexOf(" :");
+        String body = (colon > -1 && colon + 2 <= rest.length()) ? rest.substring(colon + 2) : "";
+
+        TwitchChannel ch;
+        if (target.startsWith("#")) {
+            String roomId = parseTag(tagsPart, "room-id", "");
+            ch = new TwitchChannel(target, roomId);
+        } else {
+            // Pre-login or global notice — fall back to the channel this socket
+            // is bound to so script writers still have a usable bridge context.
+            ch = new TwitchChannel(channelHash, "");
+        }
+
+        manager.dispatchNotice(ch, noticeId, body);
     }
 
     private TwitchUser userFromTags(String tagsPart) {
